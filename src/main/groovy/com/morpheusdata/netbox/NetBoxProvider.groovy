@@ -422,6 +422,7 @@ class NetBoxProvider implements IPAMProvider {
                 def externalId
                 def newIpPath
                 def tags
+                def rangeDetails 
 
                 if(poolServer.configMap?.tags) {
                     tags = new JsonSlurper().parseText(addTags(poolServer.configMap?.tags))
@@ -433,6 +434,10 @@ class NetBoxProvider implements IPAMProvider {
                     newIpPath = rangesPath
                 }
 
+                // get parent IP-range/IP-subnet details, this is required later for IP-address details
+                rangeDetails = client.callJsonApi(apiUrl,'/' + newIpPath + networkPool.externalId, requestOptions,'GET')
+                log.debug("Parent range details: ${rangeDetails.dump()}")
+
                 if(networkPoolIp.ipAddress) {
                     // Make sure it's a valid IP
                     if (inetAddressValidator.isValidInet4Address(networkPoolIp.ipAddress)) {
@@ -443,17 +448,17 @@ class NetBoxProvider implements IPAMProvider {
                         log.error("Invalid IP Address Requested: ${networkPoolIp.ipAddress}", results)
                         return ServiceResponse.error("Invalid IP Address Requested: ${networkPoolIp.ipAddress}")
                     }
-
+                    
                     requestOptions.queryParams = ['address':networkPoolIp.ipAddress + '/' + networkPool.cidr.tokenize('/')[1]]
                     // Check IP Usage
                     results = client.callJsonApi(apiUrl,apiPath,requestOptions,'GET')
-
+                    
                     if (results?.success && !results?.error) {
                         if (!results?.data.results) {
                             // If Empty, Create the IP
                             apiPath = getServicePath(rpcConfig.serviceUrl) + getIpsPath
                             requestOptions.queryParams = [:]
-                            requestOptions.body = JsonOutput.toJson(['address':networkPoolIp.ipAddress + '/' + networkPool.cidr.tokenize('/')[1],'status':'reserved',"dns_name":hostname,'tags':tags ?: []])
+                            requestOptions.body = JsonOutput.toJson(['address':networkPoolIp.ipAddress + '/' + networkPool.cidr.tokenize('/')[1],'status':'active',"dns_name":hostname,'tenant':rangeDetails.data.tenant.id,'vrf':rangeDetails.data.vrf.id,'tags':tags ?: []])
 
                             results = client.callJsonApi(apiUrl,apiPath,requestOptions,'POST')
 
@@ -462,7 +467,7 @@ class NetBoxProvider implements IPAMProvider {
                             externalId = results.data.results.id
                             apiPath = getServicePath(rpcConfig.serviceUrl) + getIpsPath + externalId + '/'
                             requestOptions.queryParams = [:]
-                            requestOptions.body = JsonOutput.toJson(['address':networkPoolIp.ipAddress + '/' + networkPool.cidr.tokenize('/')[1],'status':'reserved',"dns_name":hostname,'tags':tags ?: []])
+                            requestOptions.body = JsonOutput.toJson(['address':networkPoolIp.ipAddress + '/' + networkPool.cidr.tokenize('/')[1],'status':'active',"dns_name":hostname,'tenant':rangeDetails.data.tenant.id,'vrf':rangeDetails.data.vrf.id,'tags':tags ?: []])
 
                             results = client.callJsonApi(apiUrl,apiPath,requestOptions,'PUT')
                         } else {
@@ -480,7 +485,7 @@ class NetBoxProvider implements IPAMProvider {
 
                     if(results.success && !results.error) {
                         externalId = results.data.id
-                        requestOptions.body = JsonOutput.toJson(['address':results.data.address,'status':'reserved',"dns_name":hostname,'tags':tags ?: []])
+                        requestOptions.body = JsonOutput.toJson(['address':results.data.address,'status':'active',"dns_name":hostname,'tenant':rangeDetails.data.tenant.id,'vrf':rangeDetails.data.vrf.id,'tags':tags ?: []])
                         apiPath = getServicePath(rpcConfig.serviceUrl) + getIpsPath + externalId + '/'
                         
                         results = client.callJsonApi(apiUrl,apiPath,requestOptions,'PUT')

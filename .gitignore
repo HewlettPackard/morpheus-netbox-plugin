@@ -3,3 +3,6 @@ build/
 .DS_Store
 .idea/
 lib/
+/gradle*
+!/gradle.properties
+
