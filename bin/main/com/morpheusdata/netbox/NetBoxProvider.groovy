@@ -123,7 +123,7 @@ class NetBoxProvider implements IPAMProvider {
                 rtn.errors['servicePassword'] = 'Password is required'
             }
         }
-		
+
 
 		rtn.data = poolServer
 		if(rtn.errors.size() > 0){
@@ -131,7 +131,9 @@ class NetBoxProvider implements IPAMProvider {
 			return rtn //
 		}
         def rpcConfig = getRpcConfig(poolServer)
-		HttpApiClient netboxClient = new HttpApiClient()
+        HttpApiClient netboxClient = new HttpApiClient()
+        def networkProxy = morpheusContext.services.setting.getGlobalNetworkProxy()
+        netboxClient.networkProxy = networkProxy
         def tokenResults
 		try {
 			def apiUrl = cleanServiceUrl(poolServer.serviceUrl)
@@ -140,7 +142,7 @@ class NetBoxProvider implements IPAMProvider {
 				def apiUrlObj = new URL(apiUrl)
 				def apiHost = apiUrlObj.host
 				def apiPort = apiUrlObj.port > 0 ? apiUrlObj.port : (apiUrlObj?.protocol?.toLowerCase() == 'https' ? 443 : 80)
-				hostOnline = ConnectionUtils.testHostConnectivity(apiHost, apiPort, true, true, null)
+				hostOnline = ConnectionUtils.testHostConnectivity(apiHost, apiPort, true, true, networkProxy)
 			} catch(e) {
 				log.error("Error parsing URL {}", apiUrl, e)
 			}
@@ -205,12 +207,14 @@ class NetBoxProvider implements IPAMProvider {
 		log.debug("refreshNetworkPoolServer: {}", poolServer.dump())
 		HttpApiClient netboxClient = new HttpApiClient()
 		netboxClient.throttleRate = poolServer.serviceThrottleRate
+        def networkProxy = morpheusContext.services.setting.getGlobalNetworkProxy()
+        netboxClient.networkProxy = networkProxy
 		try {
 			def apiUrl = cleanServiceUrl(poolServer.serviceUrl)
 			def apiUrlObj = new URL(apiUrl)
 			def apiHost = apiUrlObj.host
 			def apiPort = apiUrlObj.port > 0 ? apiUrlObj.port : (apiUrlObj?.protocol?.toLowerCase() == 'https' ? 443 : 80)
-			def hostOnline = ConnectionUtils.testHostConnectivity(apiHost, apiPort, true, true, null)
+			def hostOnline = ConnectionUtils.testHostConnectivity(apiHost, apiPort, true, true, networkProxy)
 
 			log.debug("online: {} - {}", apiHost, hostOnline)
 
@@ -285,6 +289,7 @@ class NetBoxProvider implements IPAMProvider {
 
 	void addMissingPools(NetworkPoolServer poolServer, Collection<Map> chunkedAddList) {
         HttpApiClient client = new HttpApiClient();
+        client.networkProxy = morpheusContext.services.setting.getGlobalNetworkProxy()
         def rpcConfig = getRpcConfig(poolServer)
         HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
 		List<NetworkPool> missingPoolsList = []
@@ -298,6 +303,7 @@ class NetBoxProvider implements IPAMProvider {
 			def rangeConfig
             def addRange
             def poolType
+            def name = it?.description ? "${it.description} ${it.display}" : it?.display
 
             log.debug("CIDR: ${cidr} and startAddress: ${startAddress}")
 
@@ -305,7 +311,7 @@ class NetBoxProvider implements IPAMProvider {
                 if(it.prefix) {
                     poolType = new NetworkPoolType(code: 'netboxprefix')
                     def networkInfo = getNetworkPoolConfig(it.prefix)
-                    def addConfig = [account:poolServer.account, poolServer:poolServer, owner:poolServer.account, name:it.display, externalId:"${it.id}",
+                    def addConfig = [account:poolServer.account, poolServer:poolServer, owner:poolServer.account, name:name, externalId:"${it.id}",
                                     cidr: cidr,type: poolType, poolEnabled:true, parentType:'NetworkPoolServer', parentId:poolServer.id,ipCount:networkInfo.config.ipCount]
                     newNetworkPool = new NetworkPool(addConfig)
                     newNetworkPool.ipRanges = []
@@ -317,7 +323,7 @@ class NetBoxProvider implements IPAMProvider {
                     }
                 } else {
                     poolType = new NetworkPoolType(code: 'netbox')
-                    def addConfig = [account:poolServer.account, poolServer:poolServer, owner:poolServer.account, name:it.display, externalId:"${it.id}",
+                    def addConfig = [account:poolServer.account, poolServer:poolServer, owner:poolServer.account, name:name, externalId:"${it.id}",
                                     cidr: cidr, type: poolType, poolEnabled:true, parentType:'NetworkPoolServer', parentId:poolServer.id,ipCount: size]
                     newNetworkPool = new NetworkPool(addConfig)
                     newNetworkPool.ipRanges = []
@@ -337,7 +343,7 @@ class NetBoxProvider implements IPAMProvider {
                     poolType = new NetworkPoolType(code: 'netboxipv6')
                 }
                 
-                def addConfig = [account:poolServer.account, poolServer:poolServer, owner:poolServer.account, name:it.display, externalId:"${it.id}",
+                def addConfig = [account:poolServer.account, poolServer:poolServer, owner:poolServer.account, name:name, externalId:"${it.id}",
                                 cidr: cidr, type: poolType, poolEnabled:true, parentType:'NetworkPoolServer', parentId:poolServer.id,ipCount: size]
                 newNetworkPool = new NetworkPool(addConfig)
                 newNetworkPool.ipRanges = []
@@ -352,6 +358,7 @@ class NetBoxProvider implements IPAMProvider {
 
 	void updateMatchedPools(NetworkPoolServer poolServer, List<SyncTask.UpdateItem<NetworkPool,Map>> chunkedUpdateList) {
         HttpApiClient client = new HttpApiClient();
+        client.networkProxy = morpheusContext.services.setting.getGlobalNetworkProxy()
         def rpcConfig = getRpcConfig(poolServer)
         HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
 		List<NetworkPool> poolsToUpdate = []
@@ -364,9 +371,10 @@ class NetBoxProvider implements IPAMProvider {
 				//update view ?
 				def save = false
 				def networkIp = network?.start_address ?: network?.prefix
-				def displayName = network.display
-				if(existingItem?.displayName != displayName) {
-					existingItem.displayName = displayName
+                def name = network?.description ? "${network.description} ${network.display}" : network?.display
+
+				if(existingItem?.displayName != name) {
+					existingItem.displayName = name
 					save = true
 				}
 				if(existingItem?.cidr != networkIp) {
@@ -390,6 +398,7 @@ class NetBoxProvider implements IPAMProvider {
 	@Override
 	ServiceResponse createHostRecord(NetworkPoolServer poolServer, NetworkPool networkPool, NetworkPoolIp networkPoolIp, NetworkDomain domain, Boolean createARecord, Boolean createPtrRecord) {
 		HttpApiClient client = new HttpApiClient();
+        client.networkProxy = morpheusContext.services.setting.getGlobalNetworkProxy()
         InetAddressValidator inetAddressValidator = new InetAddressValidator()
         
         def rpcConfig = getRpcConfig(poolServer)
@@ -415,6 +424,7 @@ class NetBoxProvider implements IPAMProvider {
                 def externalId
                 def newIpPath
                 def tags
+                def rangeDetails 
 
                 if(poolServer.configMap?.tags) {
                     tags = new JsonSlurper().parseText(addTags(poolServer.configMap?.tags))
@@ -426,6 +436,10 @@ class NetBoxProvider implements IPAMProvider {
                     newIpPath = rangesPath
                 }
 
+                // get parent IP-range/IP-subnet details, this is required later for IP-address details
+                rangeDetails = client.callJsonApi(apiUrl,'/' + newIpPath + networkPool.externalId, requestOptions,'GET')
+                log.debug("Parent range details: ${rangeDetails.dump()}")
+
                 if(networkPoolIp.ipAddress) {
                     // Make sure it's a valid IP
                     if (inetAddressValidator.isValidInet4Address(networkPoolIp.ipAddress)) {
@@ -436,17 +450,17 @@ class NetBoxProvider implements IPAMProvider {
                         log.error("Invalid IP Address Requested: ${networkPoolIp.ipAddress}", results)
                         return ServiceResponse.error("Invalid IP Address Requested: ${networkPoolIp.ipAddress}")
                     }
-
+                    
                     requestOptions.queryParams = ['address':networkPoolIp.ipAddress + '/' + networkPool.cidr.tokenize('/')[1]]
                     // Check IP Usage
                     results = client.callJsonApi(apiUrl,apiPath,requestOptions,'GET')
-
+                    
                     if (results?.success && !results?.error) {
                         if (!results?.data.results) {
                             // If Empty, Create the IP
                             apiPath = getServicePath(rpcConfig.serviceUrl) + getIpsPath
                             requestOptions.queryParams = [:]
-                            requestOptions.body = JsonOutput.toJson(['address':networkPoolIp.ipAddress + '/' + networkPool.cidr.tokenize('/')[1],'status':'reserved',"dns_name":hostname,'tags':tags ?: []])
+                            requestOptions.body = JsonOutput.toJson(['address':networkPoolIp.ipAddress + '/' + networkPool.cidr.tokenize('/')[1],'status':'active',"dns_name":hostname,'tenant':rangeDetails?.data?.tenant?.id,'vrf':rangeDetails?.data?.vrf?.id,'tags':tags ?: []])
 
                             results = client.callJsonApi(apiUrl,apiPath,requestOptions,'POST')
 
@@ -455,7 +469,7 @@ class NetBoxProvider implements IPAMProvider {
                             externalId = results.data.results.id
                             apiPath = getServicePath(rpcConfig.serviceUrl) + getIpsPath + externalId + '/'
                             requestOptions.queryParams = [:]
-                            requestOptions.body = JsonOutput.toJson(['address':networkPoolIp.ipAddress + '/' + networkPool.cidr.tokenize('/')[1],'status':'reserved',"dns_name":hostname,'tags':tags ?: []])
+                            requestOptions.body = JsonOutput.toJson(['address':networkPoolIp.ipAddress + '/' + networkPool.cidr.tokenize('/')[1],'status':'active',"dns_name":hostname,'tenant':rangeDetails?.data?.tenant?.id,'vrf':rangeDetails?.data?.vrf?.id,'tags':tags ?: []])
 
                             results = client.callJsonApi(apiUrl,apiPath,requestOptions,'PUT')
                         } else {
@@ -473,7 +487,7 @@ class NetBoxProvider implements IPAMProvider {
 
                     if(results.success && !results.error) {
                         externalId = results.data.id
-                        requestOptions.body = JsonOutput.toJson(['address':results.data.address,'status':'reserved',"dns_name":hostname,'tags':tags ?: []])
+                        requestOptions.body = JsonOutput.toJson(['address':results.data.address,'status':'active',"dns_name":hostname,'tenant':rangeDetails?.data?.tenant?.id,'vrf':rangeDetails?.data?.vrf?.id,'tags':tags ?: []])
                         apiPath = getServicePath(rpcConfig.serviceUrl) + getIpsPath + externalId + '/'
                         
                         results = client.callJsonApi(apiUrl,apiPath,requestOptions,'PUT')
@@ -504,6 +518,7 @@ class NetBoxProvider implements IPAMProvider {
 	@Override
 	ServiceResponse updateHostRecord(NetworkPoolServer poolServer, NetworkPool networkPool, NetworkPoolIp networkPoolIp) {
 		HttpApiClient client = new HttpApiClient();
+        client.networkProxy = morpheusContext.services.setting.getGlobalNetworkProxy()
         def rpcConfig = getRpcConfig(poolServer)
         HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
         def token
@@ -546,6 +561,7 @@ class NetBoxProvider implements IPAMProvider {
 	@Override
 	ServiceResponse deleteHostRecord(NetworkPool networkPool, NetworkPoolIp poolIp, Boolean deleteAssociatedRecords ) {
 		HttpApiClient client = new HttpApiClient();
+        client.networkProxy = morpheusContext.services.setting.getGlobalNetworkProxy()
         def poolServer = morpheus.network.getPoolServerById(networkPool.poolServer.id).blockingGet()
         def rpcConfig = getRpcConfig(poolServer)
         HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)

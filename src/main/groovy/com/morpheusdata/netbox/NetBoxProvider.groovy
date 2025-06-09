@@ -303,6 +303,7 @@ class NetBoxProvider implements IPAMProvider {
 			def rangeConfig
             def addRange
             def poolType
+            def name = it?.description ? "${it.description} ${it.display}" : it?.display
 
             log.debug("CIDR: ${cidr} and startAddress: ${startAddress}")
 
@@ -310,7 +311,7 @@ class NetBoxProvider implements IPAMProvider {
                 if(it.prefix) {
                     poolType = new NetworkPoolType(code: 'netboxprefix')
                     def networkInfo = getNetworkPoolConfig(it.prefix)
-                    def addConfig = [account:poolServer.account, poolServer:poolServer, owner:poolServer.account, name:it.display, externalId:"${it.id}",
+                    def addConfig = [account:poolServer.account, poolServer:poolServer, owner:poolServer.account, name:name, externalId:"${it.id}",
                                     cidr: cidr,type: poolType, poolEnabled:true, parentType:'NetworkPoolServer', parentId:poolServer.id,ipCount:networkInfo.config.ipCount]
                     newNetworkPool = new NetworkPool(addConfig)
                     newNetworkPool.ipRanges = []
@@ -322,7 +323,7 @@ class NetBoxProvider implements IPAMProvider {
                     }
                 } else {
                     poolType = new NetworkPoolType(code: 'netbox')
-                    def addConfig = [account:poolServer.account, poolServer:poolServer, owner:poolServer.account, name:it.display, externalId:"${it.id}",
+                    def addConfig = [account:poolServer.account, poolServer:poolServer, owner:poolServer.account, name:name, externalId:"${it.id}",
                                     cidr: cidr, type: poolType, poolEnabled:true, parentType:'NetworkPoolServer', parentId:poolServer.id,ipCount: size]
                     newNetworkPool = new NetworkPool(addConfig)
                     newNetworkPool.ipRanges = []
@@ -342,7 +343,7 @@ class NetBoxProvider implements IPAMProvider {
                     poolType = new NetworkPoolType(code: 'netboxipv6')
                 }
                 
-                def addConfig = [account:poolServer.account, poolServer:poolServer, owner:poolServer.account, name:it.display, externalId:"${it.id}",
+                def addConfig = [account:poolServer.account, poolServer:poolServer, owner:poolServer.account, name:name, externalId:"${it.id}",
                                 cidr: cidr, type: poolType, poolEnabled:true, parentType:'NetworkPoolServer', parentId:poolServer.id,ipCount: size]
                 newNetworkPool = new NetworkPool(addConfig)
                 newNetworkPool.ipRanges = []
@@ -370,9 +371,10 @@ class NetBoxProvider implements IPAMProvider {
 				//update view ?
 				def save = false
 				def networkIp = network?.start_address ?: network?.prefix
-				def displayName = network.display
-				if(existingItem?.displayName != displayName) {
-					existingItem.displayName = displayName
+                def name = network?.description ? "${network.description} ${network.display}" : network?.display
+
+				if(existingItem?.displayName != name) {
+					existingItem.displayName = name
 					save = true
 				}
 				if(existingItem?.cidr != networkIp) {
@@ -458,7 +460,7 @@ class NetBoxProvider implements IPAMProvider {
                             // If Empty, Create the IP
                             apiPath = getServicePath(rpcConfig.serviceUrl) + getIpsPath
                             requestOptions.queryParams = [:]
-                            requestOptions.body = JsonOutput.toJson(['address':networkPoolIp.ipAddress + '/' + networkPool.cidr.tokenize('/')[1],'status':'active',"dns_name":hostname,'tenant':rangeDetails.data.tenant.id,'vrf':rangeDetails.data.vrf.id,'tags':tags ?: []])
+                            requestOptions.body = JsonOutput.toJson(['address':networkPoolIp.ipAddress + '/' + networkPool.cidr.tokenize('/')[1],'status':'active',"dns_name":hostname,'tenant':rangeDetails?.data?.tenant?.id,'vrf':rangeDetails?.data?.vrf?.id,'tags':tags ?: []])
 
                             results = client.callJsonApi(apiUrl,apiPath,requestOptions,'POST')
 
@@ -467,7 +469,7 @@ class NetBoxProvider implements IPAMProvider {
                             externalId = results.data.results.id
                             apiPath = getServicePath(rpcConfig.serviceUrl) + getIpsPath + externalId + '/'
                             requestOptions.queryParams = [:]
-                            requestOptions.body = JsonOutput.toJson(['address':networkPoolIp.ipAddress + '/' + networkPool.cidr.tokenize('/')[1],'status':'active',"dns_name":hostname,'tenant':rangeDetails.data.tenant.id,'vrf':rangeDetails.data.vrf.id,'tags':tags ?: []])
+                            requestOptions.body = JsonOutput.toJson(['address':networkPoolIp.ipAddress + '/' + networkPool.cidr.tokenize('/')[1],'status':'active',"dns_name":hostname,'tenant':rangeDetails?.data?.tenant?.id,'vrf':rangeDetails?.data?.vrf?.id,'tags':tags ?: []])
 
                             results = client.callJsonApi(apiUrl,apiPath,requestOptions,'PUT')
                         } else {
@@ -485,7 +487,7 @@ class NetBoxProvider implements IPAMProvider {
 
                     if(results.success && !results.error) {
                         externalId = results.data.id
-                        requestOptions.body = JsonOutput.toJson(['address':results.data.address,'status':'active',"dns_name":hostname,'tenant':rangeDetails.data.tenant.id,'vrf':rangeDetails.data.vrf.id,'tags':tags ?: []])
+                        requestOptions.body = JsonOutput.toJson(['address':results.data.address,'status':'active',"dns_name":hostname,'tenant':rangeDetails?.data?.tenant?.id,'vrf':rangeDetails?.data?.vrf?.id,'tags':tags ?: []])
                         apiPath = getServicePath(rpcConfig.serviceUrl) + getIpsPath + externalId + '/'
                         
                         results = client.callJsonApi(apiUrl,apiPath,requestOptions,'PUT')
