@@ -1,5 +1,6 @@
 package com.morpheusdata.netbox
 
+import com.morpheusdata.core.data.DataQuery
 import com.morpheusdata.core.util.HttpApiClient
 import com.morpheusdata.core.util.NetworkUtility
 import com.morpheusdata.core.IPAMProvider
@@ -201,6 +202,11 @@ class NetBoxProvider implements IPAMProvider {
 	}
 
 	protected ServiceResponse refreshNetworkPoolServer(NetworkPoolServer poolServer, Map opts) {
+        if (!poolServer.enabled) {
+            log.warn("Refresh triggered, but pool server NOT enabled, exit refresh...")
+            return
+        }
+
 		def rtn = new ServiceResponse()
         def tokenResults
         def rpcConfig = getRpcConfig(poolServer)
@@ -312,7 +318,8 @@ class NetBoxProvider implements IPAMProvider {
                     poolType = new NetworkPoolType(code: 'netboxprefix')
                     def networkInfo = getNetworkPoolConfig(it.prefix)
                     def addConfig = [account:poolServer.account, poolServer:poolServer, owner:poolServer.account, name:name, externalId:"${it.id}",
-                                    cidr: cidr,type: poolType, poolEnabled:true, parentType:'NetworkPoolServer', parentId:poolServer.id,ipCount:networkInfo.config.ipCount]
+                                    cidr: cidr,type: poolType, poolEnabled:true, parentType:'NetworkPoolServer', parentId:poolServer.id,ipCount:networkInfo.config.ipCount,
+                                    configuration:"${it.vrf?.id}", netmask: cidrToNetmask("$cidr")]
                     newNetworkPool = new NetworkPool(addConfig)
                     newNetworkPool.ipRanges = []
                     networkInfo.ranges?.each { range ->
@@ -324,7 +331,8 @@ class NetBoxProvider implements IPAMProvider {
                 } else {
                     poolType = new NetworkPoolType(code: 'netbox')
                     def addConfig = [account:poolServer.account, poolServer:poolServer, owner:poolServer.account, name:name, externalId:"${it.id}",
-                                    cidr: cidr, type: poolType, poolEnabled:true, parentType:'NetworkPoolServer', parentId:poolServer.id,ipCount: size]
+                                    cidr: cidr, type: poolType, poolEnabled:true, parentType:'NetworkPoolServer', parentId:poolServer.id,ipCount: size,
+                                    configuration:"${it.vrf?.id}", netmask: cidrToNetmask("$cidr")]
                     newNetworkPool = new NetworkPool(addConfig)
                     newNetworkPool.ipRanges = []
                     rangeConfig = [cidr:cidr, startAddress:startAddress, endAddress:endAddress, addressCount:size]
@@ -344,7 +352,7 @@ class NetBoxProvider implements IPAMProvider {
                 }
                 
                 def addConfig = [account:poolServer.account, poolServer:poolServer, owner:poolServer.account, name:name, externalId:"${it.id}",
-                                cidr: cidr, type: poolType, poolEnabled:true, parentType:'NetworkPoolServer', parentId:poolServer.id,ipCount: size]
+                                cidr: cidr, type: poolType, poolEnabled:true, parentType:'NetworkPoolServer', parentId:poolServer.id,ipCount: size,configuration:"${it.vrf?.id}"]
                 newNetworkPool = new NetworkPool(addConfig)
                 newNetworkPool.ipRanges = []
                 rangeConfig = [cidrIPv6: cidr, startIPv6Address: startAddress, endIPv6Address: endAddress,addressCount:size]
@@ -372,8 +380,13 @@ class NetBoxProvider implements IPAMProvider {
 				def save = false
 				def networkIp = network?.start_address ?: network?.prefix
                 def name = network?.description ? "${network.description} ${network.display}" : network?.display
+                def vrf = "${network?.vrf?.id}"
 
-				if(existingItem?.displayName != name) {
+                if(existingItem?.configuration != vrf) {
+                    existingItem.configuration = vrf
+                    save = true
+                }
+                if(existingItem?.displayName != name) {
 					existingItem.displayName = name
 					save = true
 				}
@@ -397,6 +410,13 @@ class NetBoxProvider implements IPAMProvider {
 	
 	@Override
 	ServiceResponse createHostRecord(NetworkPoolServer poolServer, NetworkPool networkPool, NetworkPoolIp networkPoolIp, NetworkDomain domain, Boolean createARecord, Boolean createPtrRecord) {
+        if (!poolServer.enabled) {
+            log.error("Pool server NOT enabled, host record will not be created...")
+            return ServiceResponse.error("Pool server NOT enabled, host record will not be created...")
+        }
+
+        log.debug("createHostRecord...: $networkPoolIp.ipAddress")
+
 		HttpApiClient client = new HttpApiClient();
         client.networkProxy = morpheusContext.services.setting.getGlobalNetworkProxy()
         InetAddressValidator inetAddressValidator = new InetAddressValidator()
@@ -451,7 +471,7 @@ class NetBoxProvider implements IPAMProvider {
                         return ServiceResponse.error("Invalid IP Address Requested: ${networkPoolIp.ipAddress}")
                     }
                     
-                    requestOptions.queryParams = ['address':networkPoolIp.ipAddress + '/' + networkPool.cidr.tokenize('/')[1]]
+                    requestOptions.queryParams = ['address':networkPoolIp.ipAddress + '/' + networkPool.cidr.tokenize('/')[1], 'vrf_id': "${rangeDetails?.data?.vrf?.id}"]
                     // Check IP Usage
                     results = client.callJsonApi(apiUrl,apiPath,requestOptions,'GET')
                     
@@ -466,7 +486,7 @@ class NetBoxProvider implements IPAMProvider {
 
                         } else if (results?.data?.results){
                             // If Reserved
-                            externalId = results.data.results.id
+                            externalId = results.data.results[0].id
                             apiPath = getServicePath(rpcConfig.serviceUrl) + getIpsPath + externalId + '/'
                             requestOptions.queryParams = [:]
                             requestOptions.body = JsonOutput.toJson(['address':networkPoolIp.ipAddress + '/' + networkPool.cidr.tokenize('/')[1],'status':'active',"dns_name":hostname,'tenant':rangeDetails?.data?.tenant?.id,'vrf':rangeDetails?.data?.vrf?.id,'tags':tags ?: []])
@@ -517,6 +537,12 @@ class NetBoxProvider implements IPAMProvider {
 
 	@Override
 	ServiceResponse updateHostRecord(NetworkPoolServer poolServer, NetworkPool networkPool, NetworkPoolIp networkPoolIp) {
+        if (!poolServer.enabled) {
+            log.error("Pool server NOT enabled, host record will not be updated...")
+            return ServiceResponse.error("Pool server NOT enabled, host record will not be updated...")
+        }
+
+        log.debug("updateHostRecord...: $networkPoolIp.ipAddress")
 		HttpApiClient client = new HttpApiClient();
         client.networkProxy = morpheusContext.services.setting.getGlobalNetworkProxy()
         def rpcConfig = getRpcConfig(poolServer)
@@ -535,7 +561,7 @@ class NetBoxProvider implements IPAMProvider {
                 def apiPath = getServicePath(rpcConfig.serviceUrl) + getIpsPath
                 def externalId = networkPoolIp.externalId.toString() + '/'
 
-                requestOptions.body = JsonOutput.toJson(['address':networkPoolIp.ipAddress + '/' + networkPool.cidr.tokenize('/')[1],"dns_name":hostname])
+                requestOptions.body = JsonOutput.toJson(['address':networkPoolIp.ipAddress + '/' + networkPool.cidr.tokenize('/')[1],"dns_name":hostname,'vrf_id': "${networkPool?.configuration}"])
 
                 results = client.callJsonApi(apiUrl,apiPath + externalId,null,null,requestOptions,'PUT')
 
@@ -560,6 +586,13 @@ class NetBoxProvider implements IPAMProvider {
 
 	@Override
 	ServiceResponse deleteHostRecord(NetworkPool networkPool, NetworkPoolIp poolIp, Boolean deleteAssociatedRecords ) {
+        if (!networkPool.poolServer.enabled) {
+            log.error("Pool server NOT enabled, host record will not be deleted...")
+            return ServiceResponse.error("Pool server NOT enabled, host record will not be deleted...")
+        }
+
+        log.debug("deleteHostRecord...: $poolIp.ipAddress")
+
 		HttpApiClient client = new HttpApiClient();
         client.networkProxy = morpheusContext.services.setting.getGlobalNetworkProxy()
         def poolServer = morpheus.network.getPoolServerById(networkPool.poolServer.id).blockingGet()
@@ -590,7 +623,7 @@ class NetBoxProvider implements IPAMProvider {
                 } else {
                     results = client.callJsonApi(apiUrl,apiPath + externalId,null,null,requestOptions,'DELETE')
 
-                    if(!results?.success && results?.data?.detail == 'Not found.') {
+                    if(!results?.success && (results?.data?.detail == 'Not found.' || results?.data?.detail?.contains('No IPAddress'))) {
                         return ServiceResponse.success(poolIp)
                     } else if (results?.success && !results?.error) {
                         return ServiceResponse.success(poolIp)
@@ -624,8 +657,6 @@ class NetBoxProvider implements IPAMProvider {
             HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
             requestOptions.headers = [Authorization: "Token ${token}".toString()]
 
-            log.debug("url: ${apiUrl} path: ${apiPath}")
-
             endpoints.each{ String ep ->
                 def hasMore = true
                 def attempt = 0
@@ -633,6 +664,7 @@ class NetBoxProvider implements IPAMProvider {
                 def doPaging = opts.doPaging != null ? opts.doPaging : true
                 def maxResults = opts.maxResults ?: 1000
                 def apiPath = getServicePath(rpcConfig.serviceUrl) + ep
+                log.debug("url: ${apiUrl} path: ${apiPath}")
 
                 if(doPaging == true) {    
                     while(hasMore && attempt < 1000) {
@@ -695,7 +727,6 @@ class NetBoxProvider implements IPAMProvider {
         }.concatMap { NetworkPool pool ->
             def listResults = listHostRecords(client,token,poolServer,pool)
             if (listResults.success && listResults.data) {
-
                 List<Map> apiItems = listResults.data
                 Observable<NetworkPoolIpIdentityProjection> poolIps = morpheus.network.pool.poolIp.listIdentityProjections(pool.id)
                 SyncTask<NetworkPoolIpIdentityProjection, Map, NetworkPoolIp> syncTask = new SyncTask<NetworkPoolIpIdentityProjection, Map, NetworkPoolIp>(poolIps, apiItems)
@@ -704,6 +735,9 @@ class NetBoxProvider implements IPAMProvider {
                 }.addMatchFunction { NetworkPoolIpIdentityProjection domainObject, Map apiItem ->
                     domainObject.ipAddress == apiItem.address.tokenize('/')[0]
                 }.onDelete {removeItems ->
+                    removeItems.each {
+                        removeRelatedIps(it, pool)
+                    }
                     morpheus.network.pool.poolIp.remove(pool.id, removeItems).blockingGet()
                 }.onAdd { itemsToAdd ->
                     addMissingIps(pool, itemsToAdd)
@@ -716,7 +750,7 @@ class NetBoxProvider implements IPAMProvider {
                     }
 
                 }.onUpdate { List<SyncTask.UpdateItem<NetworkDomain,Map>> updateItems ->
-                    updateMatchedIps(updateItems)
+                    updateMatchedIps(updateItems, poolServer)
                 }.observe()
             } else {
                 return Single.just(false).toObservable()
@@ -724,11 +758,41 @@ class NetBoxProvider implements IPAMProvider {
         }.doOnError{ e ->
             log.error("cacheIpRecords error: ${e}", e)
         }.blockingSubscribe()
-
     }
 
+
+    void removeRelatedIps(NetworkPoolIpIdentityProjection removeItem, NetworkPool pool) {
+        //related IP could be in IP that is in both a prefix and a pool
+        log.debug("Remove related for IP: $removeItem.ipAddress")
+        NetworkPoolIp item = morpheusContext.services.network.pool.poolIp.get(removeItem.id)
+        //multiple ip records may exist, one for pool, one for range...
+        List<NetworkPoolIp> ipList = morpheusContext.services.network.pool.poolIp.list(new DataQuery()
+                .withFilter('externalId', item.externalId)
+                .withFilter('ipAddress', item.ipAddress)
+                .withFilter('id', '!=', item.id)
+        )
+
+        def dupIsInSameIntegration = ipList.findAll {
+            def resultPool = morpheusContext.services.network.pool.get(it.networkPool.id)
+            def itemPool = morpheusContext.services.network.pool.get(item.networkPool.id)
+            //looking for duplicate IPs that belong to the same integration(poolServer) and share the same VRF
+            return resultPool.poolServer.id == itemPool.poolServer.id && it.networkPool.configuration == item.networkPool.configuration //ipToVrf["$it.externalId"] == ipToVrf["$item.externalId"]
+        }
+
+        dupIsInSameIntegration.each {
+            try {
+                log.debug("Found duplicate IP  for $removeItem.id for remove: $it.ipAddress($it.id). Pool: $it.networkPool.name, $it.networkPool.id")
+                morpheusContext.network.pool.poolIp.remove(it.networkPool.id, [it]).blockingGet()
+                //ipToVrf.remove(it.externalId)
+            } catch (Exception e) {
+                log.error("Error removing IP: $e")
+            }
+        }
+    }
+
+
 	void addMissingIps(NetworkPool pool, List addList) {
-        List<NetworkPoolIp> poolIpsToAdd = addList?.collect { it ->
+        addList?.each { it ->
 			def ipAddress = it.address.tokenize('/')[0]
 			def types = it.status.value
 			def ipType = 'assigned'
@@ -737,17 +801,18 @@ class NetBoxProvider implements IPAMProvider {
 			} else if (types == 'deprecated') {
                 ipType = 'unmanaged'
             }
-			def addConfig = [networkPool: pool, networkPoolRange: pool.ipRanges ? pool.ipRanges.first() : null, ipType: ipType, hostname: it.dns_name, ipAddress: ipAddress, externalId:it.id]
-			def newObj = new NetworkPoolIp(addConfig)
-			return newObj
-
-		}
-		if(poolIpsToAdd.size() > 0) {
-			morpheus.network.pool.poolIp.create(pool, poolIpsToAdd).blockingGet()
+            try {
+                def addConfig = [networkPool: pool, networkPoolRange: pool.ipRanges ? pool.ipRanges.first() : null, ipType: ipType, hostname: it.dns_name, ipAddress: ipAddress, externalId:it.id]
+                def newObj = new NetworkPoolIp(addConfig)
+                morpheus.services.network.pool.poolIp.bulkCreate([newObj])
+            } catch (Exception e) {
+                // don't break if one IP fails (probably due to netbox allowing duplicates)
+                log.error("Error adding IP: $e")
+            }
 		}
 	}
 
-	void updateMatchedIps(List<SyncTask.UpdateItem<NetworkPoolIp,Map>> updateList) {
+	void updateMatchedIps(List<SyncTask.UpdateItem<NetworkPoolIp,Map>> updateList, NetworkPoolServer poolServer) {
 		List<NetworkPoolIp> ipsToUpdate = []
 		updateList?.each {  update ->
 			NetworkPoolIp existingItem = update.existingItem
@@ -755,6 +820,7 @@ class NetBoxProvider implements IPAMProvider {
 			if(existingItem) {
 				def hostname = update.masterItem.dns_name
                 def types = update.masterItem.status.value
+                //def vrfId = "${update.masterItem.vrf?.id}"
 				def ipType = 'assigned'
                 if(types == 'reserved') {
                     ipType = 'reserved'
@@ -762,7 +828,8 @@ class NetBoxProvider implements IPAMProvider {
                     ipType = 'unmanaged'
                 }
 				def save = false
-				if(existingItem.ipType != ipType) {
+
+                if(existingItem.ipType != ipType) {
 					existingItem.ipType = ipType
 					save = true
 				}
@@ -801,25 +868,31 @@ class NetBoxProvider implements IPAMProvider {
 
             log.debug("url: ${apiUrl} path: ${apiPath}")
 
-            if(doPaging == true) {
+            def vrfId = networkPool.configuration ?: "null"
+            log.debug("List Netbox Hosts: Request URL: $apiUrl, path: $apiPath, pool: ${networkPool.cidr}, VRF: $vrfId")
+
+            if (doPaging == true) {
                 while(hasMore && attempt < 1000) {
                     attempt++
 
-                    requestOptions.queryParams = [limit:maxResults.toString(),offset:start.toString(),'parent':networkPool.cidr.toString()]
+                    requestOptions.queryParams = [limit:maxResults.toString(),offset:start.toString(),'parent':networkPool.cidr.toString(),'vrf_id': vrfId]
                     def results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'GET')
+                    log.debug("Netbox Pool API Call: $apiPath, $requestOptions.queryParams")
 
-                    if(results?.success && results?.error != true) {
-
+                    if (results?.success && !results?.error) {
                         rtn.success = true
-                        if(results.data?.results?.size() > 0) {
+                        if (results.data?.results?.size() > 0) {
                             results.data.results.each { it ->
-                                if (networkPool.cidr.tokenize("/")[1] == it.address.tokenize('/')[1]) {
+                                //The below if broke child ranges e.g., network 10.10.10.0/25 as a child of network 10.10.10.0/24 also contains ip record 10.10.10.100/24
+                                //if (networkPool.cidr.tokenize("/")[1] == it.address.tokenize('/')[1]) {
                                     if (!startAddress || !endAddress) {
+                                        setPoolGatewayByTag(poolServer, networkPool, it)
                                         rtn.data += it
                                     } else if (isIPInRange(it.address.tokenize('/')[0],startAddress,endAddress)) {
+                                        setPoolGatewayByTag(poolServer, networkPool, it)
                                         rtn.data += it
                                     }
-                                }
+                                //}
                             }
 
                             if(!results.data.next) {
@@ -840,7 +913,7 @@ class NetBoxProvider implements IPAMProvider {
                     }
                 }
             } else {
-                requestOptions.queryParams = [limit:maxResults.toString(),offset:start.toString(),'parent':networkPool.cidr.toString()]
+                requestOptions.queryParams = [limit:maxResults.toString(),offset:start.toString(),'parent':networkPool.cidr.toString(), 'vrf_id': vrfId]
                 def results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'GET')
 
                 if(results?.success && results?.error != true) {
@@ -920,7 +993,8 @@ class NetBoxProvider implements IPAMProvider {
 				new OptionType(code: 'netbox.ignoreSsl', name: 'Ignore SSL', inputType: OptionType.InputType.CHECKBOX, defaultValue: 0, fieldName: 'ignoreSsl', fieldLabel: 'Disable SSL SNI Verification', fieldContext: 'domain', displayOrder: 6),
 				new OptionType(code: 'netbox.inventoryExisting', name: 'Inventory Existing', inputType: OptionType.InputType.CHECKBOX, defaultValue: 0, fieldName: 'inventoryExisting', fieldLabel: 'Inventory Existing', fieldContext: 'config', displayOrder: 7),
                 new OptionType(code: 'netbox.deprecate', name: 'Deprecate on Delete', inputType: OptionType.InputType.CHECKBOX, defaultValue: 0, fieldName: 'deprecate', fieldLabel: 'Deprecate on Delete', fieldContext: 'config', displayOrder: 8),
-                new OptionType(code: 'netbox.tags', name: 'Tags', inputType: OptionType.InputType.TEXT, fieldName: 'tags', fieldLabel: 'Tags', fieldContext: 'config', displayOrder: 9, helpText: "value|value2")
+                new OptionType(code: 'netbox.tags', name: 'Tags', inputType: OptionType.InputType.TEXT, fieldName: 'tags', fieldLabel: 'Tags', fieldContext: 'config', displayOrder: 9, helpText: "value|value2"),
+                new OptionType(code: 'netbox.gwTag', name: 'Gateway Tag', inputType: OptionType.InputType.TEXT, fieldName: 'gwTag', fieldLabel: 'Gateway Tag', fieldContext: 'config', displayOrder: 11, helpText: "Populate as gateway if tag found. This gateway will take priority over the gateway specified in the network configuration if used."),
 		]
 	}
 
@@ -932,7 +1006,7 @@ class NetBoxProvider implements IPAMProvider {
     def login(HttpApiClient client, rpcConfig) {
         def rtn = [success:false]
         def expiration = formatDate(getCurrentTimePlus5Minutes())
-        if(rpcConfig.username && rpcConfig.password) {
+        if (rpcConfig.username && rpcConfig.password) {
             try {
                 HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
                 requestOptions.headers = ['content-type':'application/json']
@@ -1099,5 +1173,40 @@ class NetBoxProvider implements IPAMProvider {
             }
 
         return result
+    }
+
+    String cidrToNetmask(String cidr) {
+        def parts = cidr.split("/")
+        if (parts.size() != 2) {
+            log.debug("IllegalArgumentException: Invalid CIDR format: $cidr")
+            return null
+        }
+
+        int prefix = parts[1].toInteger()
+        if (prefix < 0 || prefix > 32) {
+            log.debug("IllegalArgumentException: Prefix must be between 0 and 32")
+            return null
+        }
+
+        int mask = 0xffffffff << (32 - prefix)
+        def octets = (3..0).collect { i -> (mask >>> (i * 8)) & 0xff }
+        return octets.join('.')
+    }
+
+
+    void setPoolGatewayByTag(NetworkPoolServer poolServer, NetworkPool networkPool, Map ipDetails) {
+        if (poolServer.configMap.gwTag) {
+            if (hasTagByName(ipDetails, "$poolServer.configMap.gwTag")) {
+                networkPool.gateway = ipDetails.address.split("/")[0]
+                morpheusContext.services.network.pool.save(networkPool)
+            }
+        }
+    }
+
+    boolean hasTagByName(Map body, String tagName) {
+        def tags = body?.tags
+        if (!(tags instanceof List)) return false
+
+        return tags.any { it?.name == tagName }
     }
 }
