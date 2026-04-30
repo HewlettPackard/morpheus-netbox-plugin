@@ -5,4 +5,5 @@ build/
 lib/
 /gradle*
 !/gradle.properties
+gradlew.bat
 
