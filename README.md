@@ -1,75 +1,128 @@
 # Morpheus NetBox Plugin
 
-This plugin provides an IPAM integration between [NetBox](https://netboxlabs.com/netbox/) and [Morpheus](https://morpheusdata.com). It enables network pool sync, IP address sync, IP allocation, host record updates, and IP release workflows from within the Morpheus platform.
+The Morpheus NetBox Plugin integrates Morpheus with NetBox to provide IP address management (IPAM) using NetBox IP ranges and prefixes. The plugin communicates with the NetBox REST API to allocate and release IP addresses and synchronise network pools.
 
-## Requirements
+## Table of Contents
 
-| Component | Minimum Version |
-|-----------|----------------|
-| Morpheus | 7.0.2 |
+- [Features](#features)
+- [Requirements](#requirements)
+- [Repository structure](#repository-structure)
+- [Building the plugin](#building-the-plugin)
+- [License](#license)
+- [Installing](#installing)
+- [Detailed Usage Steps](#detailed-usage-steps)
+- [API Endpoints](#api-endpoints)
 
-## Installation
-
-1. Download the latest `.jar` from the [Releases](https://github.com/HewlettPackard/morpheus-netbox-plugin/releases) page, or [build it yourself](#building).
-2. In Morpheus, navigate to **Administration → Integrations → Plugins**.
-3. Click **Browse** and upload the `.jar` file.
-4. The **NetBox** IPAM integration type will appear after the plugin loads.
-
-## Configuration
-
-When adding a NetBox IPAM integration in Morpheus (**Infrastructure → Network → IPAM → Add IPAM Integration**), provide the following:
-
-| Field | Description |
-|-------|-------------|
-| **API Url** | NetBox API endpoint, e.g. `https://netbox.example.com/`. |
-| **Credentials** | Morpheus credential containing either username/password or an API key. |
-| **Username** | Local username field used when not selecting a stored credential. |
-| **Password** | Local password field used when not selecting a stored credential. |
-| **API Token** | Local NetBox API token field used when not selecting a stored credential. |
-| **Throttle Rate** | Optional API throttling rate for NetBox requests. |
-| **Disable SSL SNI Verification** | Disable SSL SNI verification for the NetBox endpoint. |
-| **Inventory Existing** | Import existing IP address records from synced pools. |
-| **Deprecate on Delete** | Mark NetBox IP addresses deprecated instead of deleting them when released. |
-| **Tags** | Pipe-delimited tags to apply to IP addresses created by Morpheus, e.g. `tag1|tag2`. |
+---
 
 ## Features
 
-### IPAM Sync
-The plugin registers an `IPAMProvider` for NetBox. The following resources are discovered and kept in sync from NetBox:
+### IP Address Management
 
-- **IP Ranges** — NetBox IP ranges as Morpheus network pools
-- **Prefixes** — NetBox prefixes as Morpheus network pools
-- **IPv4 Pools** — IPv4 ranges and prefixes
-- **IPv6 Pools** — IPv6 ranges and prefixes
-- **IP Addresses** — existing NetBox IP address records when **Inventory Existing** is enabled
+Allocate and release IP addresses from NetBox IP ranges and prefixes within Morpheus. Supports automatic next-available IP selection from prefixes, manual IP entry, existing inventory import, and optional deprecation of IPs on deletion rather than hard delete.
 
-Any additions, updates, and removals in NetBox are reflected in Morpheus on the next IPAM refresh.
+### Cloud Sync
 
-### IP Allocation
-Morpheus can allocate addresses into synced NetBox pools. Supported operations include:
+Morpheus synchronises the following NetBox resources for inventory:
 
-- Allocate a requested IPv4 or IPv6 address when one is provided
-- Request the next available address from a NetBox range or prefix
-- Create or update NetBox IP address records with active status
-- Preserve NetBox tenant and VRF details from the parent range or prefix
-- Apply configured tags to IP address records created by Morpheus
+- IP ranges (`/api/ipam/ip-ranges/`)
+- Prefixes (`/api/ipam/prefixes/`)
+- IP address allocations
 
-### Host Record Lifecycle
-Morpheus host record operations are mapped to NetBox IP address records. Supported operations include:
+---
 
-- Update NetBox `dns_name` values when hostnames change
-- Delete NetBox IP address records when Morpheus releases an address
-- Optionally mark released NetBox IP addresses as deprecated instead of deleting them
-- Sync NetBox address status back into Morpheus as assigned, reserved, or unmanaged IP records
+## Requirements
 
-## Building
+| Requirement | Version |
+|-------------|---------|
+| Morpheus | 7.0.2 or later |
+| Java | 11 or later |
+| Gradle | Use the included Gradle wrapper (`./gradlew`) |
 
-```bash
-./gradlew shadowJar
+Additional prerequisites:
+
+- A running NetBox instance accessible over HTTP or HTTPS from the Morpheus appliance
+- A NetBox user account and API token with read/write access to IPAM objects
+- Network access from the Morpheus appliance to the NetBox host on the configured port
+
+---
+
+## Repository structure
+
+```
+src/main/groovy/com/morpheusdata/netbox/
+├── NetBoxPlugin.groovy    - Plugin entry point; registers NetBoxProvider
+└── NetBoxProvider.groovy  - IPAMProvider implementation; IPAM operations, sync, OptionTypes
+build.gradle, gradle.properties - Build configuration and plugin metadata
 ```
 
-The plugin JAR will be written to `build/libs/`.
+---
+
+## Building the plugin
+
+Run the following command to compile and package the plugin jar:
+
+```bash
+./gradlew clean build
+```
+
+The packaged jar will be written to `build/libs/`.
+
+To execute tests, use the following command:
+
+```bash
+./gradlew test
+```
+
+---
 
 ## License
 
-Copyright 2022 the original author or authors. Licensed under the [Apache License, Version 2.0](LICENSE).
+This project is licensed under the Apache License 2.0.
+
+See the [LICENSE](LICENSE) file for details.
+
+---
+
+## Installing
+
+1. Build the plugin (see [Building the plugin](#building-the-plugin)) or download a released jar.
+2. In Morpheus, navigate to **Administration > Integrations > Plugins**.
+3. Click **Add** and upload the `morpheus-netbox-plugin-<version>.jar` from `build/libs/`.
+4. Navigate to **Infrastructure > Networks > IP Pools > Add** and select **NetBox** to configure the integration.
+
+---
+
+## Detailed Usage Steps
+
+### Adding a NetBox IPAM Integration
+
+1. Go to **Infrastructure > Networks > IP Pools > Add**.
+2. Select **NetBox** as the pool server type.
+3. Enter the **API Url** (e.g. `https://netbox.example.com/`), **Username**, **Password** (or a stored credential), and optionally an **API Token** for token-based authentication.
+4. Optionally configure **Throttle Rate**, **Disable SSL SNI Verification**, **Inventory Existing**, **Deprecate on Delete**, and **Tags**.
+5. Save. Morpheus connects to NetBox and syncs IP ranges and prefixes as network pools.
+
+### Allocating an IP Address
+
+When provisioning an instance on a network backed by a NetBox prefix, Morpheus calls the NetBox API to allocate the next available IP from that prefix. The IP is registered in NetBox with the instance details.
+
+### Releasing an IP Address
+
+When an instance is decommissioned, Morpheus either deletes the IP allocation from NetBox or sets it to deprecated, depending on the **Deprecate on Delete** setting.
+
+---
+
+## API Endpoints
+
+This plugin communicates with the **NetBox REST API** at the configured service URL. Authentication uses an API token in the `Authorization: Token` header.
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `api/ipam/ip-ranges/` | GET | List IP ranges |
+| `api/ipam/prefixes/` | GET | List prefixes |
+| `api/ipam/prefixes/{id}/available-ips/` | POST | Allocate next available IP from a prefix |
+| `api/ipam/ip-addresses/` | GET | List IP addresses |
+| `api/ipam/ip-addresses/` | POST | Create an IP address allocation |
+| `api/ipam/ip-addresses/{id}/` | PUT | Update an IP address allocation |
+| `api/ipam/ip-addresses/{id}/` | DELETE | Delete an IP address allocation |
